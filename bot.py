@@ -231,10 +231,12 @@ async def user_query(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     custom_emoji_id = entry["custom_emoji_id"]
     from telegram import MessageEntity
     emoji_char = "\U0001f60a"  # placeholder character; the entity overrides it visually
+    # Telegram API uses UTF-16 offsets/lengths; emoji outside BMP = 2 UTF-16 units
+    utf16_length = len(emoji_char.encode("utf-16-le")) // 2
     entity = MessageEntity(
         type="custom_emoji",
         offset=0,
-        length=len(emoji_char),
+        length=utf16_length,
         custom_emoji_id=custom_emoji_id,
     )
     await msg.reply_text(emoji_char, entities=[entity])
