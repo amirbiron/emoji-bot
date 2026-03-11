@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import logging
@@ -247,4 +248,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # Python 3.14 removed implicit event loop creation in get_event_loop().
+    # Ensure a running loop exists before PTB's run_polling() needs one.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     main()
