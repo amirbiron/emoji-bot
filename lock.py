@@ -44,6 +44,7 @@ COLLECTION_NAME = "bot_locks"
 _heartbeat_stop = threading.Event()
 _heartbeat_thread: threading.Thread | None = None
 _owns_lock = False
+_db = None
 _collection = None
 
 
@@ -55,16 +56,24 @@ def _expiry():
     return _now() + timedelta(seconds=LOCK_LEASE_SECONDS)
 
 
+def get_db():
+    """Return the shared MongoDB database instance."""
+    global _db
+    if _db is not None:
+        return _db
+    client = MongoClient(MONGODB_URI)
+    try:
+        _db = client.get_default_database()
+    except ConfigurationError:
+        _db = client[os.getenv("MONGODB_DB", "emoji_bot")]
+    return _db
+
+
 def _get_collection():
     global _collection
     if _collection is not None:
         return _collection
-    client = MongoClient(MONGODB_URI)
-    try:
-        db = client.get_default_database()
-    except ConfigurationError:
-        db = client[os.getenv("MONGODB_DB", "emoji_bot")]
-    col = db[COLLECTION_NAME]
+    col = get_db()[COLLECTION_NAME]
     # Ensure TTL index so orphaned locks expire automatically.
     col.create_index("expiresAt", expireAfterSeconds=0)
     _collection = col
