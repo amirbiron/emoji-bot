@@ -2,6 +2,8 @@ import asyncio
 import os
 import json
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, Message
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -10,6 +12,30 @@ from telegram.ext import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Prevent httpx / httpcore from logging URLs that contain the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+# ── Health-check server (keeps Render happy) ─────────────────────────────────
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, *args):  # silence access logs
+        pass
+
+
+def _start_health_server():
+    port = int(os.getenv("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Health-check server listening on port %s", port)
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -243,6 +269,7 @@ def main():
         )
     )
 
+    _start_health_server()
     logger.info("Bot started.")
     app.run_polling()
 
