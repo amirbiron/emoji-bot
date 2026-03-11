@@ -35,6 +35,7 @@ LOCK_WAIT_FOR_ACQUIRE = os.getenv("LOCK_WAIT_FOR_ACQUIRE", "false").lower() == "
 LOCK_ACQUIRE_MAX_WAIT = int(os.getenv("LOCK_ACQUIRE_MAX_WAIT", "0"))
 LOCK_WAIT_MIN_SECONDS = int(os.getenv("LOCK_WAIT_MIN_SECONDS", "15"))
 LOCK_WAIT_MAX_SECONDS = int(os.getenv("LOCK_WAIT_MAX_SECONDS", "45"))
+LOCK_POST_ACQUIRE_DELAY = int(os.getenv("LOCK_POST_ACQUIRE_DELAY", "5"))
 
 COLLECTION_NAME = "bot_locks"
 
@@ -167,6 +168,7 @@ def acquire() -> bool:
     """
     if _try_acquire_once():
         logger.info("Lock acquired (instance=%s).", INSTANCE_ID)
+        _post_acquire_delay()
         _start_heartbeat()
         return True
 
@@ -174,6 +176,17 @@ def acquire() -> bool:
         return _wait_active()
     else:
         return _wait_passive()
+
+
+def _post_acquire_delay():
+    """Wait after acquiring the lock so the old instance's last getUpdates
+    call finishes before we start polling."""
+    if LOCK_POST_ACQUIRE_DELAY > 0:
+        logger.info(
+            "Waiting %ds for previous instance to fully stop…",
+            LOCK_POST_ACQUIRE_DELAY,
+        )
+        time.sleep(LOCK_POST_ACQUIRE_DELAY)
 
 
 def _wait_passive() -> bool:
@@ -186,6 +199,7 @@ def _wait_passive() -> bool:
         time.sleep(delay)
         if _try_acquire_once():
             logger.info("Lock acquired after passive wait (instance=%s).", INSTANCE_ID)
+            _post_acquire_delay()
             _start_heartbeat()
             return True
 
@@ -204,6 +218,7 @@ def _wait_active() -> bool:
         time.sleep(wait)
         if _try_acquire_once():
             logger.info("Lock acquired after active wait (instance=%s).", INSTANCE_ID)
+            _post_acquire_delay()
             _start_heartbeat()
             return True
 
