@@ -3,7 +3,7 @@ import os
 import json
 import logging
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from flask import Flask, request as flask_request, jsonify
 from telegram import Update, Message
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -18,24 +18,45 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-# ── Health-check server (keeps Render happy) ─────────────────────────────────
+# ── Flask health / admin server ──────────────────────────────────────────────
 
-class _HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
+flask_app = Flask(__name__)
+flask_app.logger.setLevel(logging.WARNING)  # silence Flask request logs
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
-    def log_message(self, *args):  # silence access logs
-        pass
+LOG_ADMIN_TOKEN = os.getenv("LOG_ADMIN_TOKEN", "")
 
 
-def _start_health_server():
+@flask_app.route("/")
+@flask_app.route("/health")
+def health():
+    return "OK", 200
+
+
+@flask_app.route("/admin/loglevel", methods=["POST"])
+def set_loglevel():
+    token = flask_request.headers.get("Authorization", "")
+    if not LOG_ADMIN_TOKEN or token != f"Bearer {LOG_ADMIN_TOKEN}":
+        return jsonify(error="unauthorized"), 401
+    data = flask_request.get_json(silent=True) or {}
+    name = data.get("logger", "root")
+    level = data.get("level", "INFO").upper()
+    numeric = getattr(logging, level, None)
+    if numeric is None:
+        return jsonify(error=f"unknown level: {level}"), 400
+    logging.getLogger(name if name != "root" else None).setLevel(numeric)
+    return jsonify(ok=True, logger=name, level=level)
+
+
+def _start_flask():
     port = int(os.getenv("PORT", "10000"))
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=lambda: flask_app.run(host="0.0.0.0", port=port, use_reloader=False),
+        daemon=True,
+    )
     thread.start()
     logger.info("Health-check server listening on port %s", port)
+
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -125,8 +146,8 @@ async def admin_receive_emoji(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     ctx.user_data["pending_file_id"] = None  # custom emoji sticker file_id fetched later
 
     await msg.reply_text(
-        "📝 מה מילות המפתח לאמוג'י הזה?\n"
-        "כתוב אותן מופרדות בפסיק, למשל: שמח, מאושר, יפה"
+        "\u2b07\ufe0f \u05de\u05d4 \u05de\u05d9\u05dc\u05d5\u05ea \u05d4\u05de\u05e4\u05ea\u05d7 \u05dc\u05d0\u05de\u05d5\u05d2'\u05d9 \u05d4\u05d6\u05d4?\n"
+        "\u05db\u05ea\u05d5\u05d1 \u05d0\u05d5\u05ea\u05df \u05de\u05d5\u05e4\u05e8\u05d3\u05d5\u05ea \u05d1\u05e4\u05e1\u05d9\u05e7, \u05dc\u05de\u05e9\u05dc: \u05e9\u05de\u05d7, \u05de\u05d0\u05d5\u05e9\u05e8, \u05d9\u05e4\u05d4"
     )
     return WAITING_KEYWORDS
 
@@ -137,7 +158,7 @@ async def admin_receive_keywords(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     keywords = [k.strip() for k in text.split(",") if k.strip()]
 
     if not keywords:
-        await update.message.reply_text("⚠️ לא קיבלתי מילות מפתח. נסה שוב.")
+        await update.message.reply_text("\u26a0\ufe0f \u05dc\u05d0 \u05e7\u05d9\u05d1\u05dc\u05ea\u05d9 \u05de\u05d9\u05dc\u05d5\u05ea \u05de\u05e4\u05ea\u05d7. \u05e0\u05e1\u05d4 \u05e9\u05d5\u05d1.")
         return WAITING_KEYWORDS
 
     custom_emoji_id = ctx.user_data.get("pending_custom_emoji_id", "")
@@ -149,14 +170,14 @@ async def admin_receive_keywords(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
 
     kw_display = ", ".join(keywords)
     await update.message.reply_text(
-        f"✅ נשמר! (ID: {entry_id})\n"
-        f"מילות מפתח: {kw_display}"
+        f"\u2705 \u05e0\u05e9\u05de\u05e8! (ID: {entry_id})\n"
+        f"\u05de\u05d9\u05dc\u05d5\u05ea \u05de\u05e4\u05ea\u05d7: {kw_display}"
     )
     return ConversationHandler.END
 
 
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("❌ בוטל.")
+    await update.message.reply_text("\u274c \u05d1\u05d5\u05d8\u05dc.")
     return ConversationHandler.END
 
 
@@ -168,15 +189,15 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     emojis = data["emojis"]
     if not emojis:
-        await update.message.reply_text("אין אמוג'ים שמורים עדיין.")
+        await update.message.reply_text("\u05d0\u05d9\u05df \u05d0\u05de\u05d5\u05d2'\u05d9\u05dd \u05e9\u05de\u05d5\u05e8\u05d9\u05dd \u05e2\u05d3\u05d9\u05d9\u05df.")
         return
 
     lines = []
     for e in emojis:
         kws = ", ".join(e["keywords"])
-        lines.append(f"🆔 {e['id']} | {kws}")
+        lines.append(f"\U0001f194 {e['id']} | {kws}")
 
-    await update.message.reply_text("📋 רשימת אמוג'ים:\n\n" + "\n".join(lines))
+    await update.message.reply_text("\U0001f4cb \u05e8\u05e9\u05d9\u05de\u05ea \u05d0\u05de\u05d5\u05d2'\u05d9\u05dd:\n\n" + "\n".join(lines))
 
 
 async def cmd_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -184,19 +205,19 @@ async def cmd_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     args = ctx.args
     if not args or not args[0].isdigit():
-        await update.message.reply_text("שימוש: /delete [id]")
+        await update.message.reply_text("\u05e9\u05d9\u05de\u05d5\u05e9: /delete [id]")
         return
     entry_id = int(args[0])
     if delete_emoji(entry_id):
-        await update.message.reply_text(f"🗑️ אמוג'י {entry_id} נמחק.")
+        await update.message.reply_text(f"\U0001f5d1\ufe0f \u05d0\u05de\u05d5\u05d2'\u05d9 {entry_id} \u05e0\u05de\u05d7\u05e7.")
     else:
-        await update.message.reply_text(f"⚠️ לא נמצא אמוג'י עם ID {entry_id}.")
+        await update.message.reply_text(f"\u26a0\ufe0f \u05dc\u05d0 \u05e0\u05de\u05e6\u05d0 \u05d0\u05de\u05d5\u05d2'\u05d9 \u05e2\u05dd ID {entry_id}.")
 
 
 # ── User handler ──────────────────────────────────────────────────────────────
 
 async def user_query(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Any user sends text / regular emoji → search and reply with custom emoji."""
+    """Any user sends text / regular emoji -> search and reply with custom emoji."""
     msg = update.message
     query = (msg.text or msg.caption or "").strip()
     if not query:
@@ -204,15 +225,12 @@ async def user_query(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     entry, score = find_emoji(query)
     if not entry:
-        await msg.reply_text("לא נמצא 🤷")
+        await msg.reply_text("\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0 \U0001f937")
         return
 
     custom_emoji_id = entry["custom_emoji_id"]
-    # Reply with the custom emoji using its ID
-    # Telegram supports sending custom emoji in text via the special syntax
-    # We send it as a text message with the custom_emoji entity
     from telegram import MessageEntity
-    emoji_char = "😊"  # placeholder character; the entity overrides it visually
+    emoji_char = "\U0001f60a"  # placeholder character; the entity overrides it visually
     entity = MessageEntity(
         type="custom_emoji",
         offset=0,
@@ -239,6 +257,13 @@ def has_custom_emoji(update: Update) -> bool:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    # Start health server first so Render sees an open port immediately.
+    _start_flask()
+
+    # Acquire distributed lock — blocks until we are the sole instance.
+    import lock
+    lock.acquire()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     # Admin conversation for adding custom emoji
@@ -269,7 +294,6 @@ def main():
         )
     )
 
-    _start_health_server()
     logger.info("Bot started.")
     app.run_polling(drop_pending_updates=True)
 
