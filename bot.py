@@ -271,7 +271,7 @@ def main():
 
     _start_health_server()
     logger.info("Bot started.")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
