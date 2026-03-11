@@ -59,7 +59,10 @@ def _get_collection():
     if _collection is not None:
         return _collection
     client = MongoClient(MONGODB_URI)
-    db = client.get_default_database()
+    try:
+        db = client.get_default_database()
+    except Exception:
+        db = client[os.getenv("MONGODB_DB", "emoji_bot")]
     col = db[COLLECTION_NAME]
     # Ensure TTL index so orphaned locks expire automatically.
     col.create_index("expiresAt", expireAfterSeconds=0)
