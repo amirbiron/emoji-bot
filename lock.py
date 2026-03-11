@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from pymongo import MongoClient, ASCENDING
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import ConfigurationError, DuplicateKeyError
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def _get_collection():
     client = MongoClient(MONGODB_URI)
     try:
         db = client.get_default_database()
-    except Exception:
+    except ConfigurationError:
         db = client[os.getenv("MONGODB_DB", "emoji_bot")]
     col = db[COLLECTION_NAME]
     # Ensure TTL index so orphaned locks expire automatically.
