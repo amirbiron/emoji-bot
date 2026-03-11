@@ -1,6 +1,5 @@
 import asyncio
 import os
-import json
 import logging
 import threading
 from flask import Flask, request as flask_request, jsonify
@@ -60,47 +59,48 @@ def _start_flask():
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-EMOJIS_FILE = "emojis.json"
 
 WAITING_KEYWORDS = 1
 
 
-# ── Storage helpers ──────────────────────────────────────────────────────────
+# ── Storage helpers (MongoDB-backed) ─────────────────────────────────────────
 
-def load_data() -> dict:
-    if not os.path.exists(EMOJIS_FILE):
-        return {"emojis": [], "next_id": 1}
-    with open(EMOJIS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def _emojis_col():
+    import lock
+    return lock.get_db()["emojis"]
 
 
-def save_data(data: dict):
-    with open(EMOJIS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def _counters_col():
+    import lock
+    return lock.get_db()["counters"]
+
+
+def _next_id() -> int:
+    """Atomically increment and return the next emoji id."""
+    from pymongo import ReturnDocument
+    doc = _counters_col().find_one_and_update(
+        {"_id": "emoji_id"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return doc["seq"]
 
 
 def add_emoji(custom_emoji_id: str, file_id: str, keywords: list[str]) -> int:
-    data = load_data()
-    entry = {
-        "id": data["next_id"],
+    entry_id = _next_id()
+    _emojis_col().insert_one({
+        "id": entry_id,
         "custom_emoji_id": custom_emoji_id,
         "file_id": file_id,
         "keywords": [k.strip().lower() for k in keywords],
-    }
-    data["emojis"].append(entry)
-    data["next_id"] += 1
-    save_data(data)
-    return entry["id"]
+    })
+    return entry_id
 
 
 def delete_emoji(entry_id: int) -> bool:
-    data = load_data()
-    before = len(data["emojis"])
-    data["emojis"] = [e for e in data["emojis"] if e["id"] != entry_id]
-    if len(data["emojis"]) < before:
-        save_data(data)
-        return True
-    return False
+    result = _emojis_col().delete_one({"id": entry_id})
+    return result.deleted_count > 0
 
 
 def find_emoji(query: str):
@@ -108,11 +108,10 @@ def find_emoji(query: str):
     Returns (entry, score) for the best match, or (None, 0).
     Exact keyword match = score 2, partial = score 1.
     """
-    data = load_data()
     q = query.strip().lower()
     best_entry, best_score = None, 0
 
-    for entry in data["emojis"]:
+    for entry in _emojis_col().find():
         score = 0
         for kw in entry["keywords"]:
             if kw == q:
@@ -124,6 +123,12 @@ def find_emoji(query: str):
             best_entry = entry
 
     return best_entry, best_score
+
+
+def load_data() -> dict:
+    """Return all emojis as a list (used by cmd_list)."""
+    emojis = list(_emojis_col().find({}, {"_id": 0}))
+    return {"emojis": emojis}
 
 
 # ── Admin conversation: add emoji ────────────────────────────────────────────
